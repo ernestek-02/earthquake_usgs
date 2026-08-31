@@ -1,11 +1,9 @@
-FROM python:3.12-slim
+FROM apache/spark:4.0.0
+
+USER root
 
 WORKDIR /app
 
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY analytics.py .
 
-CMD ["python", "-u", "analytics.py"]
+CMD ["/opt/spark/bin/spark-submit", "--master", "spark://spark-master:7077", "--packages", "org.mongodb.spark:mongo-spark-connector_2.13:11.1.0", "/app/analytics.py"]

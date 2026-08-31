@@ -1,47 +1,92 @@
 import os
+import time
 
-from pymongo import MongoClient
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import avg, max
+
 
 MONGO_HOST = os.getenv("MONGO_HOST")
-MONGO_PORT = int(os.getenv("MONGO_PORT"))
+MONGO_PORT = os.getenv("MONGO_PORT")
 MONGO_DB = os.getenv("MONGO_DB")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION")
 
-client = MongoClient(MONGO_HOST, MONGO_PORT)
-db = client[MONGO_DB]
-collection = db[MONGO_COLLECTION]
-total = collection.count_documents({})
 
-print(f"Numero totale terremoti registrati: {total}")
-
-pipeline = [
-    {
-        "$group": {
-            "_id": None,
-            "magnitudo_media": {"$avg": "$magnitude"},
-            "magnitudo_massima": {"$max": "$magnitude"},
-            "profondita_media": {"$avg": "$depth"}
-        }
-    }
-]
-
-result = list(collection.aggregate(pipeline))
-
-if result:
-    stats = result[0]
-
-    print(f"Magnitudo media: {stats['magnitudo_media']:.1f}")
-    print(f"Magnitudo massima: {stats['magnitudo_massima']:.1f}")
-    print(f"Profondità media: {stats['profondita_media']:.2f} km")
+mongo_uri = (
+    f"mongodb://{MONGO_HOST}:{MONGO_PORT}/"
+    f"{MONGO_DB}.{MONGO_COLLECTION}"
+)
 
 
-print("\nTop 3 terremoti più forti:")
-
-earthquakes = collection.find().sort("magnitude", -1).limit(3)
-
-for earthquake in earthquakes:
-    print(
-        earthquake["place"],
-        "- Magnitudo:",
-        earthquake["magnitude"]
+spark = (
+    SparkSession.builder
+    .appName("EarthquakeAnalytics")
+    .config(
+        "spark.mongodb.read.connection.uri",
+        mongo_uri
     )
+    .getOrCreate()
+)
+
+
+print("Spark Analytics avviato...", flush=True)
+
+
+while True:
+
+    df = (
+        spark.read
+        .format("mongodb")
+        .load()
+    )
+
+    total = df.count()
+
+    if total > 0:
+
+        stats = (
+            df.agg(
+                avg("magnitude").alias("magnitudo_media"),
+                max("magnitude").alias("magnitudo_massima"),
+                avg("depth").alias("profondita_media")
+            )
+            .collect()[0]
+        )
+
+        result = spark.createDataFrame(
+            [
+                (
+                    "global",
+                    total,
+                    stats["magnitudo_media"],
+                    stats["magnitudo_massima"],
+                    stats["profondita_media"]
+                )
+            ],
+            [
+                "id",
+                "total",
+                "magnitudo_media",
+                "magnitudo_massima",
+                "profondita_media"
+            ]
+        )
+
+        (
+            result.write
+            .format("mongodb")
+            .mode("overwrite")
+            .option(
+                "spark.mongodb.write.connection.uri",
+                f"mongodb://{MONGO_HOST}:{MONGO_PORT}/"
+                f"{MONGO_DB}.analytics_results"
+            )
+            .save()
+        )
+
+        print(
+            f"Analytics aggiornate - "
+            f"Totale: {total}",
+            flush=True
+        )
+
+    time.sleep(5)
