@@ -5,7 +5,8 @@ services:
       context: ./INGESTION
     container_name: ingestion
     depends_on:
-      - kafka
+      kafka-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     restart: unless-stopped
@@ -24,22 +25,154 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+  
+  kafka-init:
+    image: apache/kafka:latest
+    depends_on:
+      - kafka
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5 &&
+      /opt/kafka/bin/kafka-topics.sh
+      --bootstrap-server kafka:9092
+      --create
+      --if-not-exists
+      --topic earthquakes
+      --partitions 3
+      --replication-factor 1
+      "
 
-  mongodb:
+  mongo-1:
     image: mongo:latest
-    container_name: mongodb
+    container_name: mongo-1
+    command:
+      - mongod
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --port
+      - "27017"
     ports:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - db.adminCommand("ping").ok
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  mongo-2:
+    image: mongo:latest
+    container_name: mongo-2
+    command:
+      - mongod
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --port
+      - "27017"
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_2_data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - db.adminCommand("ping").ok
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  mongo-3:
+    image: mongo:latest
+    container_name: mongo-3
+    command:
+      - mongod
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --port
+      - "27017"
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo_3_data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - db.adminCommand("ping").ok
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  mongo-init:
+    image: mongo:latest
+    container_name: mongo-init
+    depends_on:
+      mongo-1:
+        condition: service_healthy
+      mongo-2:
+        condition: service_healthy
+      mongo-3:
+        condition: service_healthy
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        mongosh --host mongo-1:27017 --quiet --eval '
+          try {
+            rs.status();
+            print("Replica set già inizializzato");
+          } catch (error) {
+            rs.initiate({
+              _id: "rs0",
+              members: [
+                { _id: 0, host: "mongo-1:27017", priority: 2 },
+                { _id: 1, host: "mongo-2:27017", priority: 1 },
+                { _id: 2, host: "mongo-3:27017", priority: 1 }
+              ]
+            });
+          }
+        '
+
+        until mongosh \
+          --host mongo-1:27017 \
+          --quiet \
+          --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)'
+        do
+          echo "Attendo elezione del Primary..."
+          sleep 2
+        done
+
+        echo "Replica set rs0 pronto"
+    restart: "no"
 
   processing:
     build:
       context: ./PROCESSING
-    container_name: processing
     depends_on:
-      - kafka
-      - mongodb
+      kafka-init:
+        condition: service_completed_successfully
+      mongo-init:
+        condition: service_completed_successfully
     env_file:
       - .env
     restart: unless-stopped
@@ -66,14 +199,31 @@ services:
     ports:
       - "8081:8081"
 
+  spark-worker-2:
+    image: apache/spark:4.0.0
+    container_name: spark-worker-2
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+    depends_on:
+      - spark-master
+    ports:
+      - "8082:8081"
+
   analytics:
     build:
       context: ./ANALYTICS
     container_name: analytics
     depends_on:
-      - mongodb
-      - spark-master
-      - spark-worker
+      mongo-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      spark-worker-2:
+        condition: service_started
     env_file:
       - .env
     restart: unless-stopped
@@ -83,12 +233,22 @@ services:
       context: ./DASHBOARD
     container_name: dashboard
     depends_on:
-      - mongodb
+      mongo-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      spark-worker-2:
+        condition: service_started
     env_file:
       - .env
     ports:
       - "8501:8501"
+      - "39001:39001"
     restart: unless-stopped
 
 volumes:
   mongodb_data:
+  mongo_2_data:
+  mongo_3_data:

@@ -5,21 +5,23 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import avg, max
 
 
-MONGO_HOST = os.getenv("MONGO_HOST")
-MONGO_PORT = os.getenv("MONGO_PORT")
+MONGO_HOSTS = os.getenv("MONGO_HOSTS")
+MONGO_REPLICA_SET = os.getenv("MONGO_REPLICA_SET")
 MONGO_DB = os.getenv("MONGO_DB")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION")
 
-
 mongo_uri = (
-    f"mongodb://{MONGO_HOST}:{MONGO_PORT}/"
+    f"mongodb://{MONGO_HOSTS}/"
     f"{MONGO_DB}.{MONGO_COLLECTION}"
+    f"?replicaSet={MONGO_REPLICA_SET}"
 )
 
 
 spark = (
     SparkSession.builder
     .appName("EarthquakeAnalytics")
+    .config("spark.cores.max", "4")
+    .config("spark.executor.cores", "4")
     .config(
         "spark.mongodb.read.connection.uri",
         mongo_uri
@@ -77,8 +79,11 @@ while True:
             .mode("overwrite")
             .option(
                 "spark.mongodb.write.connection.uri",
-                f"mongodb://{MONGO_HOST}:{MONGO_PORT}/"
-                f"{MONGO_DB}.analytics_results"
+                (
+                    f"mongodb://{MONGO_HOSTS}/"
+                    f"{MONGO_DB}.analytics_results"
+                    f"?replicaSet={MONGO_REPLICA_SET}"
+                )
             )
             .save()
         )

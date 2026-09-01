@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+FROM apache/spark:4.0.0
+
+USER root
 
 WORKDIR /app
 
@@ -8,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dashboard.py .
 
-CMD ["streamlit", "run", "dashboard.py", "--server.address=0.0.0.0"]
+CMD ["python3", "-m", "streamlit", "run", "dashboard.py", "--server.address=0.0.0.0", "--server.port=8501"]

@@ -1,4 +1,4 @@
 streamlit
-pymongo
 pandas
 pydeck
+pyspark==4.0.0

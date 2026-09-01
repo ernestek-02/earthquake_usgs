@@ -20,19 +20,40 @@ producer = KafkaProducer(
 
 while True:
 
-    response = requests.get(USGS_URL)
-    data = response.json()
-
-    earthquakes = data["features"]
-
-    for earthquake in earthquakes:
-        producer.send(
-            KAFKA_TOPIC,
-            json.dumps(earthquake).encode("utf-8")
+    try:
+        response = requests.get(
+            USGS_URL,
+            timeout=10
         )
 
-    producer.flush()
+        response.raise_for_status()
 
-    print(f"Inviati {len(earthquakes)} terremoti a Kafka", flush=True)
+        data = response.json()
+        earthquakes = data["features"]
+
+        for earthquake in earthquakes:
+            producer.send(
+                KAFKA_TOPIC,
+                json.dumps(earthquake).encode("utf-8")
+            )
+
+        producer.flush()
+
+        print(
+            f"Inviati {len(earthquakes)} terremoti a Kafka",
+            flush=True
+        )
+
+    except requests.RequestException as error:
+        print(
+            f"Errore durante il download USGS: {error}",
+            flush=True
+        )
+
+    except (ValueError, KeyError) as error:
+        print(
+            f"Errore nei dati ricevuti da USGS: {error}",
+            flush=True
+        )
 
     time.sleep(POLL_INTERVAL)
